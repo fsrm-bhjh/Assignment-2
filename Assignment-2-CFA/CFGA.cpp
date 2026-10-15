@@ -38,10 +38,68 @@ void CFGAnalysis::analyze(SVF::ICFG *icfg)
     for (auto src : sources)
         for (auto snk : sinks)
         {
-            // TODO: DFS the graph, starting from src and detecting the paths ending at snk.
-            // Use the class method 'recordPath' (already defined) to record the path you detected.
-            //@{
+            using State = std::pair<unsigned, std::stack<unsigned>>;
+            std::set<State> visited;
+            std::vector<unsigned> path;
 
-            //@}
+            std::function<void(const ICFGNode *)> dfs = [&](const ICFGNode *node)
+            {
+                const State state(node->getId(), callStack);
+                if (!visited.insert(state).second)
+                    return;
+                path.push_back(node->getId());
+
+                if (node->getId() == snk)
+                {
+                    if (callStack.empty())
+                        recordPath(path);
+                }
+                else
+                {
+                    for (const auto *edge : node->getOutEdges())
+                    {
+                        if (const auto *call = dyn_cast<CallCFGEdge>(edge))
+                        {
+                            const unsigned callsite = call->getCallSite()->getId();
+                            auto pending = callStack;
+                            bool recursive = false;
+                            while (!pending.empty())
+                            {
+                                if (pending.top() == callsite)
+                                {
+                                    recursive = true;
+                                    break;
+                                }
+                                pending.pop();
+                            }
+                            if (recursive)
+                                continue;
+
+                            callStack.push(callsite);
+                            dfs(edge->getDstNode());
+                            callStack.pop();
+                        }
+                        else if (const auto *ret = dyn_cast<RetCFGEdge>(edge))
+                        {
+                            const unsigned callsite = ret->getCallSite()->getId();
+                            if (callStack.empty() || callStack.top() != callsite)
+                                continue;
+
+                            callStack.pop();
+                            dfs(edge->getDstNode());
+                            callStack.push(callsite);
+                        }
+                        else if (isa<IntraCFGEdge>(edge))
+                        {
+                            dfs(edge->getDstNode());
+                        }
+                    }
+                }
+
+                path.pop_back();
+                visited.erase(state);
+            };
+
+            dfs(icfg->getICFGNode(src));
         }
 }
